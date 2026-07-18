@@ -87,6 +87,14 @@ patch_file() {
         "${PATCHELF}" --set-rpath "${changed_rpath}" "${file}"
     fi
 
+    # Rewrite RPATHs from other build directories (sstate cache reuse)
+    # to the current HOST_DIR so --make-rpath-relative below can work.
+    rpath="$("${PATCHELF}" --print-rpath "${file}" 2>&1)"
+    changed_rpath="$(echo "${rpath}" | sed "s@/[^:]\+/host/lib@${HOST_DIR}/lib@g")"
+    if test "${rpath}" != "${changed_rpath}" ; then
+        "${PATCHELF}" --set-rpath "${changed_rpath}" "${file}"
+    fi
+
     # call patchelf to sanitize the rpath
     "${PATCHELF}" --make-rpath-relative "${rootdir}" "${sanitize_extra_args[@]}" "${file}"
     # restore the original permission
