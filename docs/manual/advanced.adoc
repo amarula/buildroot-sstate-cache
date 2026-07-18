@@ -9,6 +9,8 @@ include::using-buildroot-debugger.adoc[]
 
 include::ccache-support.adoc[]
 
+include::sstate-cache-support.adoc[]
+
 include::download-location.adoc[]
 
 include::package-make-target.adoc[]

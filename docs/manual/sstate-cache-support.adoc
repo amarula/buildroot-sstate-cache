@@ -1,0 +1,157 @@
+// -*- mode:doc; -*-
+// vim: set syntax=asciidoc:
+
+[[sstate-cache]]
+==== Using shared state cache (sstate-cache) in Buildroot
+
+The Buildroot shared state cache (sstate-cache) is a mechanism that
+caches the installation output of each package. On subsequent builds
+where nothing has changed for a package, the download, configure, and
+build steps are skipped, and the pre-built installation files are
+restored directly from compressed tarballs stored in the cache.
+
+When doing almost identical builds from scratch a number of times (for
+example on a CI server or when switching between branches), sstate-cache
+can dramatically speed up the build process.
+
+sstate-cache support is integrated in Buildroot. You just have to
+enable +Enable shared state cache (sstate)+ in +Build options+. When
+enabled, Buildroot will:
+
+* Compute a state signature (SHA256 hash) for each package, based on
+  its recipe file, patches, relevant Buildroot configuration variables,
+  source tarball, and the state signatures of all its dependencies.
+* On the first build: capture the package's installation output into
+  compressed tarballs stored in the cache directory.
+* On subsequent builds with a matching signature: skip the configure
+  and build steps, and restore the pre-built files from the cache.
+
+The cache directory is defined by the +BR2_SSTATE_CACHE_DIR+
+configuration option, which defaults to +$HOME/.buildroot-sstate-cache+.
+This default location is outside of the Buildroot output directory so
+that it can be shared by separate Buildroot builds (including builds
+using different +O=+ output directories). State signature hashes and
+debug logs are stored in subdirectories within this cache directory.
+
+If you want to get rid of the entire cache, simply remove this directory.
+To remove only the cached artifacts for the current configuration
+while keeping artifacts from other configurations, use
++make sstate-clean+.
+
+[[sstate-cache-signatures]]
+===== How state signatures are computed
+
+For each package, Buildroot computes a deterministic SHA256 hash from
+the following inputs:
+
+. All +.mk+ files in the package directory (the recipe)
+. All patch files applied to the package, including from
+  +BR2_GLOBAL_PATCH_DIR+
+. A targeted subset of Buildroot configuration variables that affect
+  binary build output (architecture, compiler version, C library,
+  optimization flags, hardening options, debug/strip settings, etc.).
+  Adding or removing unrelated packages does NOT invalidate the cache.
+. The source tarball, if any
+. The state signatures of all recursive dependencies. If a dependency's
+  recipe or configuration changes, all packages that depend on it
+  automatically get a new signature.
+
+The state signature for each package is saved as
++<pkg>-<hash>.hash+ in the cache directory. A debug log showing the
+exact inputs used to compute the hash is saved as +<pkg>-<hash>.log+.
+
+[[sstate-cache-abstraction]]
+===== How installation output is captured
+
+During the first build, when a package runs its installation step,
+Buildroot uses Linux kernel OverlayFS support to intercept writes to
+the destination directories. The kernel routes all newly written files
+to an isolated upper directory, which is then compressed into a
+tarball and atomically saved to the cache directory. The captured
+files are also synced to their real destination so the build can
+continue normally.
+
+The following cache artifacts are created for each package, depending
+on which installation steps the package performs:
+
+* +<pkg>-<hash>-target.tar.gz+: files installed to the target
+  filesystem
+* +<pkg>-<hash>-staging.tar.gz+: files installed to the staging
+  directory (libraries and headers)
+* +<pkg>-<hash>-host.tar.gz+: files installed to the host directory
+  (build tools)
+* +<pkg>-<hash>-images.tar.gz+: files installed to the images
+  directory (kernel, bootloader, firmware)
+
+On systems where user namespaces or OverlayFS are not available,
+Buildroot falls back to a file-list-based approach using the existing
+per-package file tracking (+pkg_size_before+/+pkg_size_after+).
+
+[[sstate-cache-non-reproducible-builds]]
+===== Non-reproducible builds and cross-directory reuse
+
+When artifacts built in one output directory are reused in another,
+hardcoded paths inside cached binaries may point to the old directory.
+Buildroot handles this in two ways:
+
+* Host binaries: Buildroot's +fix-rpath+ script rewrites RPATHs to
+  use +$ORIGIN/+-based relative paths, making host tools relocatable
+  between different output directories. This runs automatically after
+  the first batch of cached artifacts is restored.
+
+* Target binaries: Target filesystem images are always rebuilt from
+  scratch at the end of the build, so absolute paths inside target
+  binaries are not a concern for sstate-cache reuse.
+
+[[sstate-cache-limitations]]
+===== Known limitations
+
+* The source extraction and patching steps always run, even on cache
+  hits. These steps are fast and are needed to provide source files
+  for kconfig-based packages (Linux kernel, U-Boot, BusyBox).
+
+* Packages that install files to the images directory (Linux, U-Boot,
+  ARM Trusted Firmware) must always run their build step because
+  downstream packages may depend on the files they produce.
+
+* When sharing caches between different output directories, a small
+  one-time overhead occurs on the first cached package as +fix-rpath+
+  relocates host binaries.
+
+* The first build after enabling sstate-cache has no speed benefit
+  (cache artifacts must be created). Benefits appear from the second
+  build onwards.
+
+[[sstate-cache-variables]]
+===== Environment variables
+
+The +BR2_SSTATE_CACHE_DIR+ environment variable can be used to
+override the cache directory location at build time, even when
+sstate-cache is not enabled in the configuration. This is useful for
+CI scripts that want to pre-seed a cache.
+
+[[sstate-cache-debug]]
+===== Debugging cache behavior
+
+To understand why a package was rebuilt (cache miss) instead of
+restored from cache (cache hit), inspect the debug log file:
+
+----
+$ cat ~/.buildroot-sstate-cache/hashes/linux-<hash>.log
+=== Recipe: .mk files ===
+<recipe file hashes>
+=== Patches ===
+<patch file hashes>
+=== Buildroot config (targeted) ===
+BR2_ARCH="aarch64"
+BR2_GCC_VERSION="15.3.0"
+...
+=== Source ===
+<source tarball hash>
+=== Dependencies ===
+host-openssl = 1 revision(s)
+...
+----
+
+Comparing the debug logs for two different hashes of the same package
+will show exactly which input changed between builds.
