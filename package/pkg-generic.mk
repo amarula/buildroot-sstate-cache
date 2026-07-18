@@ -350,10 +350,7 @@ define sstate-create-artifacts
 			--output "$(SSTATE_DIR)/$${PNAME}-$${HASH}-images.tar.gz" \
 			--dest "$(BINARIES_DIR)"; \
 	fi; \
-		if [ -n "$${PNAME}" ] && [ -n "$${HASH}" ]; then \
-		mkdir -p "$(SSTATE_HASH_DIR)"; \
-		cp "$(@D)/.sstate-hash" "$(SSTATE_HASH_DIR)/$${PNAME}-$${HASH}.hash"; \
-	fi
+
 
 endef
 
@@ -384,6 +381,13 @@ $(BUILD_DIR)/%/.stamp_downloaded:
 	$(foreach hook,$($(PKG)_POST_DOWNLOAD_HOOKS),$(call $(hook))$(sep))
 	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ]; then \
 		$(call sstate-compute-hash); \
+			mkdir -p "$(SSTATE_HASH_DIR)"; \
+			HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\012'); \
+			echo "$${HASH}" >> "$(SSTATE_HASH_DIR)/$($(PKG)_NAME)-$${HASH}.hash"; \
+			RAWNAME=$$(echo "$($(PKG)_NAME)" | sed 's/^host-//'); \
+			if [ "$${RAWNAME}" != "$($(PKG)_NAME)" ]; then \
+				echo "$${HASH}" >> "$(SSTATE_HASH_DIR)/$${RAWNAME}-$${HASH}.hash"; \
+			fi; \
 		$(call sstate-check-cache); \
 		if [ "$${SSTATE_CACHE_HIT}" = "yes" ]; then \
 			$(call MESSAGE,"sstate cache hit - restoring artifacts"); \
