@@ -350,7 +350,6 @@ define sstate-create-artifacts
 	fi; \
 		if [ -n "$${PNAME}" ] && [ -n "$${HASH}" ]; then \
 		mkdir -p "$(SSTATE_HASH_DIR)"; \
-		rm -f "$(SSTATE_HASH_DIR)/$${PNAME}.hash"; \
 		cp "$(@D)/.sstate-hash" "$(SSTATE_HASH_DIR)/$${PNAME}-$${HASH}.hash"; \
 	fi
 

@@ -249,9 +249,9 @@ mkdir -p "$OUTPUT_DIR"
 echo "$FINAL_HASH" > "${OUTPUT_FILE}.tmp"
 mv "${OUTPUT_FILE}.tmp" "$OUTPUT_FILE"
 
-# Write hash to shared hash directory for downstream packages (atomic)
+# Save debug log: the full input data used to compute this hash.
+# Written to <pkg>-<hash>.log for troubleshooting hash mismatches.
 mkdir -p "$HASH_DIR"
-echo "$FINAL_HASH" > "${HASH_DIR}/${PKG_NAME}.hash.tmp"
-mv "${HASH_DIR}/${PKG_NAME}.hash.tmp" "${HASH_DIR}/${PKG_NAME}.hash"
+cp "$INPUT_FILE" "${HASH_DIR}/${PKG_NAME}-${FINAL_HASH}.log"
 
 echo "$FINAL_HASH"
