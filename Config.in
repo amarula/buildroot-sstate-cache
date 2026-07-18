@@ -432,6 +432,45 @@ config BR2_CCACHE_USE_BASEDIR
 
 endif
 
+config BR2_SSTATE_CACHE
+	bool "Enable shared state cache (sstate)"
+	help
+	  This option enables a Yocto-style shared state cache (sstate).
+	  When enabled, Buildroot will compute a state signature for each
+	  package and cache its install output as compressed tarballs.
+	  On subsequent builds with matching signatures, the download,
+	  extract, patch, configure, and build steps are skipped, and the
+	  cached install files are restored directly.
+
+	  Note that this feature relies on Buildroot's existing per-package
+	  file-list tracking (pkg_size_before/pkg_size_after) to determine
+	  which files belong to each package. This works transparently in
+	  both shared-directory and per-package-directory modes.
+
+	  Changing any package configuration, patches, dependencies, or
+	  Buildroot .config settings will invalidate the cache for the
+	  affected packages and trigger a full rebuild.
+
+if BR2_SSTATE_CACHE
+
+config BR2_SSTATE_CACHE_DIR
+	string "Shared state cache location"
+	default "$(HOME)/.buildroot-sstate-cache"
+	help
+	  Where Buildroot should store the shared state cache artifacts
+	  (compressed tarballs of per-package install output).
+
+	  If the Linux shell environment has defined the BR2_SSTATE_CACHE_DIR
+	  environment variable, then this overrides this configuration item.
+
+	  Shared state hashes (package signatures) are stored in a
+	  'hashes' subdirectory within this location.
+
+	  To share the cache across build machines, set this to a network
+	  filesystem path (e.g. /nfs/shared/sstate-cache).
+
+endif
+
 config BR2_ENABLE_DEBUG
 	bool "build packages with debugging symbols"
 	help

@@ -215,6 +215,9 @@ BUILD_DIR := $(BASE_DIR)/build
 BINARIES_DIR := $(BASE_DIR)/images
 BASE_TARGET_DIR := $(BASE_DIR)/target
 PER_PACKAGE_DIR := $(BASE_DIR)/per-package
+# default, before .config is included
+SSTATE_DIR := $(HOME)/.buildroot-sstate-cache
+SSTATE_HASH_DIR := $(SSTATE_DIR)/hashes
 # initial definition so that 'make clean' works for most users, even without
 # .config. HOST_DIR will be overwritten later when .config is included.
 HOST_DIR := $(BASE_DIR)/host
@@ -507,7 +510,13 @@ export TARGET_DIR
 export STAGING_DIR
 export HOST_DIR
 export BINARIES_DIR
+# Use configured shared state cache path
+SSTATE_DIR = $(call qstrip,$(BR2_SSTATE_CACHE_DIR))
+SSTATE_HASH_DIR = $(SSTATE_DIR)/hashes
+
 export BASE_DIR
+export SSTATE_DIR
+export SSTATE_HASH_DIR
 
 ################################################################################
 #
