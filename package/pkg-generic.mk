@@ -489,12 +489,8 @@ $(BUILD_DIR)/%/.stamp_configured:
 	@$(call pkg_size_before,$(STAGING_DIR),-staging)
 	@$(call pkg_size_before,$(BINARIES_DIR),-images)
 	@$(call pkg_size_before,$(HOST_DIR),-host)
-	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
-		echo ">>> $($(PKG)_NAME)  Skipping configure (sstate cache hit)"; \
-	else \
-		$(call MESSAGE,"Configuring"); \
-		sh "$(@D)/.sstate-configure.sh"; \
-	fi
+	$(call MESSAGE,"Configuring")
+	sh "$(@D)/.sstate-configure.sh"
 	@$(call step_end,configure)
 	$(Q)touch $@
 $(BUILD_DIR)/%/.stamp_built:
