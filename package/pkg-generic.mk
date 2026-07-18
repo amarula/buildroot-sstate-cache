@@ -324,6 +324,7 @@ define sstate-create-artifacts
 	$(call MESSAGE,"Creating sstate cache artifacts"); \
 	HASH=$$(cat "$(@D)/.sstate-hash"); \
 	PNAME="$($(PKG)_NAME)"; \
+	test -n "$${HASH}" || exit 0; \
 	if [ -f "$(@D)/.files-list.txt" ] && [ -s "$(@D)/.files-list.txt" ]; then \
 		$(TOPDIR)/support/scripts/capture-overlay.sh capture \
 			--file-list "$(@D)/.files-list.txt" \
