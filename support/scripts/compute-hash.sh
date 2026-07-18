@@ -204,10 +204,13 @@ if [ ${#DEPS[@]} -gt 0 ]; then
     IFS=$'\n' sorted_deps=($(sort <<<"${DEPS[*]}"))
     unset IFS
     for dep in "${sorted_deps[@]}"; do
-        DEP_HASH_FILE="$HASH_DIR/${dep}.hash"
-        if [ -f "$DEP_HASH_FILE" ]; then
-            cat "$DEP_HASH_FILE" >> "$INPUT_FILE"
-            echo "  $dep = $(cat "$DEP_HASH_FILE")" >> "$INPUT_FILE"
+        # Read all hash files for this dependency. Multiple revisions
+        # can coexist (e.g. host-libzlib-ABC.hash, host-libzlib-DEF.hash).
+        # Sorting ensures deterministic hashing regardless of directory order.
+        DEP_FILES=$(ls "$HASH_DIR/${dep}-"*.hash 2>/dev/null | sort)
+        if [ -n "$DEP_FILES" ]; then
+            cat $DEP_FILES >> "$INPUT_FILE"
+            echo "  $dep = $(echo $DEP_FILES | wc -w) revision(s)" >> "$INPUT_FILE"
         else
             # No pre-built hash file for this dependency. Hash the
             # dep recipe .mk files as fallback, so that recipe changes

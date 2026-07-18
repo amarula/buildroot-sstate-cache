@@ -37,7 +37,7 @@ $(BUILD_DIR)/%/.stamp_staging_installed:
 		touch "$(@D)/.sstate-overlay"; \
 	else \
 		$(call MESSAGE,"Installing to staging directory"); \
-		sh "$(@D)/.sstate-install-staging.sh"; \
+		+sh "$(@D)/.sstate-install-staging.sh"; \
 	fi
 	@# Fix config scripts (always runs after install)
 	$(Q)if test -n "$($(PKG)_CONFIG_SCRIPTS)" ; then \
@@ -350,11 +350,7 @@ define sstate-create-artifacts
 	fi; \
 		if [ -n "$${PNAME}" ] && [ -n "$${HASH}" ]; then \
 		mkdir -p "$(SSTATE_HASH_DIR)"; \
-		cp "$(@D)/.sstate-hash" "$(SSTATE_HASH_DIR)/$${PNAME}.hash"; \
-		RAWNAME=$$(echo "$${PNAME}" | sed 's/^host-//'); \
-		if [ "$${RAWNAME}" != "$${PNAME}" ]; then \
-			cp "$(@D)/.sstate-hash" "$(SSTATE_HASH_DIR)/$${RAWNAME}.hash"; \
-		fi; \
+		cp "$(@D)/.sstate-hash" "$(SSTATE_HASH_DIR)/$${PNAME}-$${HASH}.hash"; \
 	fi
 
 endef
@@ -524,6 +520,7 @@ $(BUILD_DIR)/%/.stamp_host_installed:
 	$(file >$(@D)/.sstate-install-host.sh,#!/bin/sh)
 		$(file >>$(@D)/.sstate-install-host.sh,if [ -f "$(@D)/.sstate-hit" ]; then exit 0; fi)
 	$(file >>$(@D)/.sstate-install-host.sh,set -e)
+	$(file >>$(@D)/.sstate-install-host.sh,if [ -f "$(@D)/.sstate-hit" ]; then exit 0; fi)
 	$(foreach h,$($(PKG)_PRE_INSTALL_HOOKS),$(file >>$(@D)/.sstate-install-host.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-install-host.sh,$(call $(h))))
 	$(file >>$(@D)/.sstate-install-host.sh,$($(PKG)_INSTALL_CMDS))
 	$(foreach h,$($(PKG)_POST_INSTALL_HOOKS),$(file >>$(@D)/.sstate-install-host.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-install-host.sh,$(call $(h))))
@@ -540,7 +537,7 @@ $(BUILD_DIR)/%/.stamp_host_installed:
 		touch "$(@D)/.sstate-overlay"; \
 	else \
 		$(call MESSAGE,"Installing to host directory"); \
-		sh "$(@D)/.sstate-install-host.sh"; \
+		+sh "$(@D)/.sstate-install-host.sh"; \
 	fi
 	@$(call step_end,install-host)
 	$(Q)touch $@
@@ -563,7 +560,7 @@ $(BUILD_DIR)/%/.stamp_images_installed:
 		touch "$(@D)/.sstate-overlay"; \
 	else \
 		$(call MESSAGE,"Installing to images directory"); \
-		sh "$(@D)/.sstate-install-images.sh"; \
+		+sh "$(@D)/.sstate-install-images.sh"; \
 	fi
 	@$(call step_end,install-image)
 	$(Q)touch $@
@@ -592,7 +589,7 @@ $(BUILD_DIR)/%/.stamp_target_installed:
 		touch "$(@D)/.sstate-overlay"; \
 	else \
 		$(call MESSAGE,"Installing to target"); \
-		sh "$(@D)/.sstate-install-target.sh"; \
+		+sh "$(@D)/.sstate-install-target.sh"; \
 	fi
 	$(Q)if test -n "$($(PKG)_CONFIG_SCRIPTS)" ; then \
 		$(RM) -f $(addprefix $(TARGET_DIR)/usr/bin/,$($(PKG)_CONFIG_SCRIPTS)) ; \
