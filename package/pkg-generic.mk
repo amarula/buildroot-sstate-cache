@@ -400,6 +400,12 @@ $(BUILD_DIR)/%/.stamp_downloaded:
 				--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-images.tar.gz" \
 				--dest "$(BINARIES_DIR)" & \
 			wait; \
+			if [ -x "$(HOST_DIR)/bin/patchelf" ] && \
+			   [ ! -f "$(HOST_DIR)/.sstate-rpath-fixed" ]; then \
+				$(TOPDIR)/support/scripts/fix-rpath host; \
+				$(TOPDIR)/support/scripts/fix-rpath staging; \
+				touch "$(HOST_DIR)/.sstate-rpath-fixed"; \
+			fi; \
 			SSTATE_OK=1; \
 			if [ "$($(PKG)_INSTALL_IMAGES)" = "YES" ] && \
 			   [ ! -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-images.tar.gz" ]; then \
