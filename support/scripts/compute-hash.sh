@@ -178,7 +178,7 @@ if [ -f "$CONFIG_FILE" ]; then
     # Extract matching lines, sort for determinism, and hash
     grep -E "$GREP_PATTERN" "$CONFIG_FILE" | LC_ALL=C sort > "$TMPDIR/config-filtered"
     if [ -s "$TMPDIR/config-filtered" ]; then
-        sha256sum "$TMPDIR/config-filtered" | cut -d' ' -f1 >> "$INPUT_FILE"
+        cat "$TMPDIR/config-filtered" >> "$INPUT_FILE"
         echo "  ($(wc -l < "$TMPDIR/config-filtered") config variables)" >> "$INPUT_FILE"
     else
         echo "EMPTY_TARGETED_CONFIG" >> "$INPUT_FILE"
