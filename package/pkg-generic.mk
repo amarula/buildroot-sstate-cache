@@ -275,7 +275,7 @@ endef
 # Sets shell var SSTATE_CACHE_HIT to "yes" or "no".
 define sstate-check-cache
 		SSTATE_CACHE_HIT="no"; \
-		HASH=$$(cat "$(@D)/.sstate-hash" 2>/dev/null | tr -d '\n' || true); \
+		HASH=$$(cat "$(@D)/.sstate-hash" 2>/dev/null | tr -d '\012' || true); \
 		if [ -n "$${HASH}" ]; then \
 			if [ "$($(PKG)_TYPE)" = "host" ]; then \
 				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-host.tar.gz" && SSTATE_CACHE_HIT="yes"; \
@@ -297,7 +297,7 @@ endef
 # $1: phase name (host, staging, target)
 # $2: destination directory (HOST_DIR, STAGING_DIR, TARGET_DIR)
 define sstate-restore-phase
-	HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\n'); \
+	HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\012'); \
 	$(TOPDIR)/support/scripts/capture-overlay.sh restore \
 		--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-$(1).tar.gz" \
 		--dest "$(2)"
@@ -309,7 +309,7 @@ endef
 # $2: destination directory
 # $3: path to install script
 define sstate-overlay-capture
-	HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\n'); \
+	HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\012'); \
 	mkdir -p "$(SSTATE_DIR)"; \
 	$(TOPDIR)/support/scripts/capture-overlay.sh overlay \
 		--dest "$(2)" \
@@ -322,7 +322,7 @@ endef
 # Called from .stamp_installed on cache miss.
 define sstate-create-artifacts
 	$(call MESSAGE,"Creating sstate cache artifacts"); \
-	HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\n'); \
+	HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\012'); \
 	PNAME="$($(PKG)_NAME)"; \
 	test -n "$${HASH}" || exit 0; \
 	if [ -f "$(@D)/.files-list.txt" ] && [ -s "$(@D)/.files-list.txt" ]; then \
@@ -386,7 +386,7 @@ $(BUILD_DIR)/%/.stamp_downloaded:
 		$(call sstate-check-cache); \
 		if [ "$${SSTATE_CACHE_HIT}" = "yes" ]; then \
 			$(call MESSAGE,"sstate cache hit - restoring artifacts"); \
-			HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\n'); \
+			HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\012'); \
 			mkdir -p "$(HOST_DIR)" "$(TARGET_DIR)" "$(STAGING_DIR)" "$(BINARIES_DIR)"; \
 			$(TOPDIR)/support/scripts/capture-overlay.sh restore \
 				--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-host.tar.gz" \
