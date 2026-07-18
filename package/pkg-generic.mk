@@ -1,3 +1,80 @@
+#
+# Some packages install libtool .la files alongside any installed
+# libraries. These .la files sometimes refer to paths relative to the
+# sysroot, which libtool will interpret as absolute paths to host
+# libraries instead of the target libraries. Since this is not what we
+# want, these paths are fixed by prefixing them with $(STAGING_DIR).
+# As we configure with --prefix=/usr, this fix needs to be applied to
+# any path that starts with /usr.
+#
+# To protect against the case that the output or staging directories or
+# the pre-installed external toolchain themselves are under /usr, we first
+# substitute away any occurrences of these directories with @BASE_DIR@,
+# @STAGING_DIR@ and @TOOLCHAIN_EXTERNAL_INSTALL_DIR@ respectively.
+#
+# Note that STAGING_DIR can be outside BASE_DIR when the user sets
+# BR2_HOST_DIR to a custom value. Note that TOOLCHAIN_EXTERNAL_INSTALL_DIR
+# can be under @BASE_DIR@ when it's a downloaded toolchain, and can be
+# empty when we use an internal toolchain.
+#
+$(BUILD_DIR)/%/.stamp_staging_installed:
+	@$(call step_start,install-staging)
+	@# Generate install script (Make-level, no shell involved)
+	$(file >$(@D)/.sstate-install-staging.sh,#!/bin/sh)
+	$(file >>$(@D)/.sstate-install-staging.sh,set -e)
+	$(foreach h,$($(PKG)_PRE_INSTALL_STAGING_HOOKS),$(file >>$(@D)/.sstate-install-staging.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-install-staging.sh,$(call $(h))))
+	$(file >>$(@D)/.sstate-install-staging.sh,$($(PKG)_INSTALL_STAGING_CMDS))
+	$(foreach h,$($(PKG)_POST_INSTALL_STAGING_HOOKS),$(file >>$(@D)/.sstate-install-staging.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-install-staging.sh,$(call $(h))))
+	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-install-staging.sh"
+	@# Execute: restore, overlay capture, or direct
+	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ -f "$(@D)/.sstate-hit" ]; then \
+		$(call sstate-restore-phase,staging,$(STAGING_DIR)); \
+	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
+		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
+		[ "$${OVL}" = "supported" ]; then \
+		$(call MESSAGE,"Installing to staging directory (capturing with OverlayFS)"); \
+		$(call sstate-overlay-capture,staging,$(STAGING_DIR),$(@D)/.sstate-install-staging.sh); \
+		touch "$(@D)/.sstate-overlay"; \
+	else \
+		$(call MESSAGE,"Installing to staging directory"); \
+		sh "$(@D)/.sstate-install-staging.sh"; \
+	fi
+	@# Fix config scripts (always runs after install)
+	$(Q)if test -n "$($(PKG)_CONFIG_SCRIPTS)" ; then \
+		$(call MESSAGE,"Fixing package configuration files") ;\
+			$(SED)  "s,$(HOST_DIR),@HOST_DIR@,g" \
+				-e "s,$(BASE_DIR),@BASE_DIR@,g" \
+				-e "s,^\(exec_\)\?prefix=.*,prefix=@STAGING_DIR@/usr,g" \
+				-e "s,-I/usr/,-I@STAGING_DIR@/usr/,g" \
+				-e "s,-L/usr/,-L@STAGING_DIR@/usr/,g" \
+				-e 's,@STAGING_DIR@,$$(dirname $$(readlink -e $$0))/../..,g' \
+				-e 's,@HOST_DIR@,$$(dirname $$(readlink -e $$0))/../../../..,g' \
+				-e "s,@BASE_DIR@,$(BASE_DIR),g" \
+				$(addprefix $(STAGING_DIR)/usr/bin/,$($(PKG)_CONFIG_SCRIPTS)) ;\
+	fi
+	@# Fix libtool files (always runs after install)
+	@$(call MESSAGE,"Fixing libtool files")
+	for la in $$(find $(STAGING_DIR)/usr/lib* -name "*.la"); do \
+		cp -a "$${la}" "$${la}.fixed" && \
+		$(SED) "s:$(BASE_DIR):@BASE_DIR@:g" \
+			-e "s:$(STAGING_DIR):@STAGING_DIR@:g" \
+			$(if $(TOOLCHAIN_EXTERNAL_INSTALL_DIR),\
+				-e "s:$(TOOLCHAIN_EXTERNAL_INSTALL_DIR):@TOOLCHAIN_EXTERNAL_INSTALL_DIR@:g") \
+			-e "s:\(['= ]\)/usr:\1@STAGING_DIR@/usr:g" \
+			-e "s:\(['= ]\)/lib:\1@STAGING_DIR@/lib:g" \
+			$(if $(TOOLCHAIN_EXTERNAL_INSTALL_DIR),\
+				-e "s:@TOOLCHAIN_EXTERNAL_INSTALL_DIR@:$(TOOLCHAIN_EXTERNAL_INSTALL_DIR):g") \
+			-e "s:@STAGING_DIR@:$(STAGING_DIR):g" \
+			-e "s:@BASE_DIR@:$(BASE_DIR):g" \
+			"$${la}.fixed" && \
+		if cmp -s "$${la}" "$${la}.fixed"; then \
+			rm -f "$${la}.fixed"; \
+		else \
+			mv "$${la}.fixed" "$${la}"; \
+		fi || exit 1; \
+	done
+	@$(call step_end,install-staging)
+	$(Q)touch $@
 ################################################################################
 # Generic package infrastructure
 #
@@ -58,8 +135,10 @@ GLOBAL_INSTRUMENTATION_HOOKS += step_time
 # This hook checks that host packages that need libraries that we build
 # have a proper DT_RPATH or DT_RUNPATH tag
 define check_host_rpath
-	$(if $(filter install-host,$(2)),\
-		$(if $(filter end,$(1)),support/scripts/check-host-rpath $(3) $(HOST_DIR) $(PER_PACKAGE_DIR)))
+		$(if $(filter install-host,$(2)),\
+			$(if $(filter end,$(1)),\
+				$(if $(wildcard $($(PKG)_DIR)/.sstate-hit),,\
+					support/scripts/check-host-rpath $(3) $(HOST_DIR) $(PER_PACKAGE_DIR))))
 endef
 GLOBAL_INSTRUMENTATION_HOOKS += check_host_rpath
 
@@ -167,6 +246,120 @@ define REMOVE_CONFLICTING_USELESS_FILES_IN_TARGET
 endef
 
 ################################################################################
+# sstate-cache helper macros
+################################################################################
+
+# sstate-compute-hash
+# Called from .stamp_downloaded to compute package state signature.
+define sstate-compute-hash
+	mkdir -p "$(SSTATE_DIR)" "$(SSTATE_HASH_DIR)"; \
+	$(TOPDIR)/support/scripts/compute-hash.sh \
+		--pkg-name "$($(PKG)_NAME)" \
+		--pkg-dir "$($(PKG)_PKGDIR)" \
+		--config "$(BR2_CONFIG)" \
+		--hash-dir "$(SSTATE_HASH_DIR)" \
+		--output "$(@D)/.sstate-hash" \
+		$(if $($(PKG)_SOURCE),--source "$($(PKG)_DL_DIR)/$($(PKG)_SOURCE)",) \
+		$(foreach p,$(sort $(wildcard $($(PKG)_PKGDIR)/*.patch)),--patch '$(p)') \
+		$(foreach p,$(sort $(wildcard $($(PKG)_PKGDIR)/$($(PKG)_VERSION)/*.patch)),--patch '$(p)') \
+		$(foreach d,$(call qstrip,$(BR2_GLOBAL_PATCH_DIR)), \
+			$(foreach p,$(sort $(wildcard $(d)/$($(PKG)_RAWNAME)/*.patch)),--patch '$(p)') \
+			$(foreach p,$(sort $(wildcard $(d)/$($(PKG)_RAWNAME)/$($(PKG)_VERSION)/*.patch)),--patch '$(p)')) \
+		$(foreach dep,$($(PKG)_FINAL_RECURSIVE_DEPENDENCIES),--dep $(dep))
+endef
+# sstate-check-cache
+# Check whether at least one required sstate tarball exists for this
+# package. Uses "any match" rather than "all match" because some
+# packages declare a phase (e.g. INSTALL_STAGING=YES) but produce no
+# files in that phase, so the artifact is never created.
+# Sets shell var SSTATE_CACHE_HIT to "yes" or "no".
+define sstate-check-cache
+		SSTATE_CACHE_HIT="no"; \
+		HASH=$$(cat "$(@D)/.sstate-hash" 2>/dev/null || true); \
+		if [ -n "$${HASH}" ]; then \
+			if [ "$($(PKG)_TYPE)" = "host" ]; then \
+				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-host.tar.gz" && SSTATE_CACHE_HIT="yes"; \
+			else \
+				FOUND=0; \
+				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-target.tar.gz" && { FOUND=1; SSTATE_CACHE_HIT="yes"; }; \
+				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-staging.tar.gz" && { FOUND=1; SSTATE_CACHE_HIT="yes"; }; \
+				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-images.tar.gz" && { FOUND=1; SSTATE_CACHE_HIT="yes"; }; \
+				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-host.tar.gz" && { FOUND=1; SSTATE_CACHE_HIT="yes"; }; \
+				if [ "$${FOUND}" -eq 0 ]; then \
+					SSTATE_CACHE_HIT="no"; \
+				fi; \
+			fi; \
+		fi
+endef
+
+# sstate-restore-phase
+# Restore a single phase (host/staging/target) from cache tarball.
+# $1: phase name (host, staging, target)
+# $2: destination directory (HOST_DIR, STAGING_DIR, TARGET_DIR)
+define sstate-restore-phase
+	HASH=$$(cat "$(@D)/.sstate-hash"); \
+	$(TOPDIR)/support/scripts/capture-overlay.sh restore \
+		--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-$(1).tar.gz" \
+		--dest "$(2)"
+endef
+
+# sstate-overlay-capture
+# Capture a single install phase using OverlayFS.
+# $1: phase name (host, staging, target)
+# $2: destination directory
+# $3: path to install script
+define sstate-overlay-capture
+	HASH=$$(cat "$(@D)/.sstate-hash"); \
+	mkdir -p "$(SSTATE_DIR)"; \
+	$(TOPDIR)/support/scripts/capture-overlay.sh overlay \
+		--dest "$(2)" \
+		--output "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-$(1).tar.gz" \
+		--script "$(3)"
+endef
+
+# sstate-create-artifacts
+# Create cache tarballs from pkg_size_after file lists.
+# Called from .stamp_installed on cache miss.
+define sstate-create-artifacts
+	$(call MESSAGE,"Creating sstate cache artifacts"); \
+	HASH=$$(cat "$(@D)/.sstate-hash"); \
+	PNAME="$($(PKG)_NAME)"; \
+	if [ -f "$(@D)/.files-list.txt" ] && [ -s "$(@D)/.files-list.txt" ]; then \
+		$(TOPDIR)/support/scripts/capture-overlay.sh capture \
+			--file-list "$(@D)/.files-list.txt" \
+			--output "$(SSTATE_DIR)/$${PNAME}-$${HASH}-target.tar.gz" \
+			--dest "$(TARGET_DIR)"; \
+	fi; \
+	if [ -f "$(@D)/.files-list-staging.txt" ] && [ -s "$(@D)/.files-list-staging.txt" ]; then \
+		$(TOPDIR)/support/scripts/capture-overlay.sh capture \
+			--file-list "$(@D)/.files-list-staging.txt" \
+			--output "$(SSTATE_DIR)/$${PNAME}-$${HASH}-staging.tar.gz" \
+			--dest "$(STAGING_DIR)"; \
+	fi; \
+	if [ -f "$(@D)/.files-list-host.txt" ] && [ -s "$(@D)/.files-list-host.txt" ]; then \
+		$(TOPDIR)/support/scripts/capture-overlay.sh capture \
+			--file-list "$(@D)/.files-list-host.txt" \
+			--output "$(SSTATE_DIR)/$${PNAME}-$${HASH}-host.tar.gz" \
+			--dest "$(HOST_DIR)"; \
+	fi; \
+	if [ -f "$(@D)/.files-list-images.txt" ] && [ -s "$(@D)/.files-list-images.txt" ]; then \
+		$(TOPDIR)/support/scripts/capture-overlay.sh capture \
+			--file-list "$(@D)/.files-list-images.txt" \
+			--output "$(SSTATE_DIR)/$${PNAME}-$${HASH}-images.tar.gz" \
+			--dest "$(BINARIES_DIR)"; \
+	fi; \
+		if [ -n "$${PNAME}" ] && [ -n "$${HASH}" ]; then \
+		mkdir -p "$(SSTATE_HASH_DIR)"; \
+		cp "$(@D)/.sstate-hash" "$(SSTATE_HASH_DIR)/$${PNAME}.hash"; \
+		RAWNAME=$$(echo "$${PNAME}" | sed 's/^host-//'); \
+		if [ "$${RAWNAME}" != "$${PNAME}" ]; then \
+			cp "$(@D)/.sstate-hash" "$(SSTATE_HASH_DIR)/$${RAWNAME}.hash"; \
+		fi; \
+	fi
+
+endef
+
+################################################################################
 # Implicit targets -- produce a stamp file for each step of a package build
 ################################################################################
 
@@ -191,6 +384,38 @@ $(BUILD_DIR)/%/.stamp_downloaded:
 	)
 	$(foreach p,$($(PKG)_ADDITIONAL_DOWNLOADS),$(call DOWNLOAD,$(p))$(sep))
 	$(foreach hook,$($(PKG)_POST_DOWNLOAD_HOOKS),$(call $(hook))$(sep))
+	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ]; then \
+		$(call sstate-compute-hash); \
+		$(call sstate-check-cache); \
+		if [ "$${SSTATE_CACHE_HIT}" = "yes" ]; then \
+			$(call MESSAGE,"sstate cache hit - restoring artifacts"); \
+			HASH=$$(cat "$(@D)/.sstate-hash"); \
+			mkdir -p "$(HOST_DIR)" "$(TARGET_DIR)" "$(STAGING_DIR)" "$(BINARIES_DIR)"; \
+			$(TOPDIR)/support/scripts/capture-overlay.sh restore \
+				--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-host.tar.gz" \
+				--dest "$(HOST_DIR)" & \
+			$(TOPDIR)/support/scripts/capture-overlay.sh restore \
+				--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-target.tar.gz" \
+				--dest "$(TARGET_DIR)" & \
+			$(TOPDIR)/support/scripts/capture-overlay.sh restore \
+				--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-staging.tar.gz" \
+				--dest "$(STAGING_DIR)" & \
+			$(TOPDIR)/support/scripts/capture-overlay.sh restore \
+				--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-images.tar.gz" \
+				--dest "$(BINARIES_DIR)" & \
+			wait; \
+			SSTATE_OK=1; \
+			if [ "$($(PKG)_INSTALL_IMAGES)" = "YES" ] && \
+			   [ ! -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-images.tar.gz" ]; then \
+				SSTATE_OK=0; \
+			fi; \
+			if [ "$${SSTATE_OK}" -eq 1 ]; then \
+				touch "$(@D)/.sstate-hit"; \
+			else \
+				$(call MESSAGE,"sstate cache incomplete - rebuilding"); \
+			fi; \
+		fi; \
+	fi
 	$(Q)mkdir -p $(@D)
 	@$(call step_end,download)
 	$(Q)touch $@
@@ -206,19 +431,23 @@ $(BUILD_DIR)/%/.stamp_actual_downloaded:
 # Unpack the archive
 $(BUILD_DIR)/%/.stamp_extracted:
 	@$(call step_start,extract)
-	@$(call MESSAGE,"Extracting")
-	$(call prepare-per-package-directory,$($(PKG)_FINAL_EXTRACT_DEPENDENCIES))
-	$(foreach hook,$($(PKG)_PRE_EXTRACT_HOOKS),$(call $(hook))$(sep))
-	$(Q)mkdir -p $(@D)
-	$($(PKG)_EXTRACT_CMDS)
-# some packages have messed up permissions inside
-	$(Q)chmod -R +rw $(@D)
-	$(foreach hook,$($(PKG)_POST_EXTRACT_HOOKS),$(call $(hook))$(sep))
+	$(file >$(@D)/.sstate-extract.sh,#!/bin/sh)
+	$(file >>$(@D)/.sstate-extract.sh,set -e)
+	$(file >>$(@D)/.sstate-extract.sh,$(call prepare-per-package-directory,$($(PKG)_FINAL_EXTRACT_DEPENDENCIES)))
+	$(file >>$(@D)/.sstate-extract.sh,mkdir -p $(@D))
+	$(foreach hook,$($(PKG)_PRE_EXTRACT_HOOKS),$(file >>$(@D)/.sstate-extract.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-extract.sh,$(call $(hook))))
+	$(file >>$(@D)/.sstate-extract.sh,$($(PKG)_EXTRACT_CMDS))
+	$(foreach hook,$($(PKG)_POST_EXTRACT_HOOKS),$(file >>$(@D)/.sstate-extract.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-extract.sh,$(call $(hook))))
+	$(file >>$(@D)/.sstate-extract.sh,chmod -R +rw $(@D))
+	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-extract.sh"
+	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
+		echo ">>> $($(PKG)_NAME)  Skipping extract (sstate cache hit)"; \
+	else \
+		$(call MESSAGE,"Extracting"); \
+		sh "$(@D)/.sstate-extract.sh"; \
+	fi
 	@$(call step_end,extract)
 	$(Q)touch $@
-
-# Rsync the source directory if the <pkg>_OVERRIDE_SRCDIR feature is
-# used.
 $(BUILD_DIR)/%/.stamp_rsynced:
 	@$(call step_start,rsync)
 	@$(call MESSAGE,"Syncing from source dir $(SRCDIR)")
@@ -233,157 +462,155 @@ $(BUILD_DIR)/%/.stamp_rsynced:
 # Patch
 $(BUILD_DIR)/%/.stamp_patched:
 	@$(call step_start,patch)
-	@$(call MESSAGE,"Patching")
-	$(foreach hook,$($(PKG)_PRE_PATCH_HOOKS),$(call $(hook))$(sep))
-	$(foreach p,$($(PKG)_PATCH),$(APPLY_PATCHES) $(@D) $($(PKG)_DL_DIR) $(notdir $(p))$(sep))
-	$(foreach dir,$(call pkg-patches-dirs,$(PKG)),\
-		$(Q)$(APPLY_PATCHES) $(@D) $(dir) \*.patch$(sep)\
-	)
-	$(foreach hook,$($(PKG)_POST_PATCH_HOOKS),$(call $(hook))$(sep))
+	$(file >$(@D)/.sstate-patch.sh,#!/bin/sh)
+	$(file >>$(@D)/.sstate-patch.sh,set -e)
+	$(foreach hook,$($(PKG)_PRE_PATCH_HOOKS),$(file >>$(@D)/.sstate-patch.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-patch.sh,$(call $(hook))))
+	$(foreach p,$($(PKG)_PATCH),$(file >>$(@D)/.sstate-patch.sh,$(APPLY_PATCHES) $(@D) $($(PKG)_DL_DIR) $(notdir $(p))))
+	$(foreach dir,$(call pkg-patches-dirs,$(PKG)),$(file >>$(@D)/.sstate-patch.sh,$(APPLY_PATCHES) $(@D) $(dir) \*.patch))
+	$(foreach hook,$($(PKG)_POST_PATCH_HOOKS),$(file >>$(@D)/.sstate-patch.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-patch.sh,$(call $(hook))))
+	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-patch.sh"
+	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
+		echo ">>> $($(PKG)_NAME)  Skipping patch (sstate cache hit)"; \
+		if [ -n "$($(PKG)_KCONFIG_STAMP_DOTCONFIG)" ]; then \
+			touch "$(@D)/$($(PKG)_KCONFIG_STAMP_DOTCONFIG)" \
+				"$(@D)/.stamp_kconfig_fixup_done" 2>/dev/null || true; \
+		fi; \
+	else \
+		$(call MESSAGE,"Patching"); \
+		sh "$(@D)/.sstate-patch.sh"; \
+	fi
 	@$(call step_end,patch)
 	$(Q)touch $@
-
-# Check that all directories specified in BR2_GLOBAL_PATCH_DIR exist.
-$(foreach dir,$(call qstrip,$(BR2_GLOBAL_PATCH_DIR)),\
-	$(if $(wildcard $(dir)),,\
-		$(error BR2_GLOBAL_PATCH_DIR contains nonexistent directory $(dir))))
-
-# Configure
 $(BUILD_DIR)/%/.stamp_configured:
 	@$(call step_start,configure)
-	@$(call MESSAGE,"Configuring")
-	$(Q)mkdir -p $(HOST_DIR) $(TARGET_DIR) $(STAGING_DIR) $(BINARIES_DIR)
-	$(call prepare-per-package-directory,$($(PKG)_FINAL_DEPENDENCIES))
-	$(foreach hook,$($(PKG)_POST_PREPARE_HOOKS),$(call $(hook))$(sep))
+	$(file >$(@D)/.sstate-configure.sh,#!/bin/sh)
+	$(file >>$(@D)/.sstate-configure.sh,set -e)
+	$(file >>$(@D)/.sstate-configure.sh,mkdir -p $(HOST_DIR) $(TARGET_DIR) $(STAGING_DIR) $(BINARIES_DIR))
+	$(file >>$(@D)/.sstate-configure.sh,$(call prepare-per-package-directory,$($(PKG)_FINAL_DEPENDENCIES)))
+	$(foreach hook,$($(PKG)_POST_PREPARE_HOOKS),$(file >>$(@D)/.sstate-configure.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-configure.sh,$(call $(hook))))
+	$(foreach hook,$($(PKG)_PRE_CONFIGURE_HOOKS),$(file >>$(@D)/.sstate-configure.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-configure.sh,$(call $(hook))))
+	$(file >>$(@D)/.sstate-configure.sh,$($(PKG)_CONFIGURE_CMDS))
+	$(foreach hook,$($(PKG)_POST_CONFIGURE_HOOKS),$(file >>$(@D)/.sstate-configure.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-configure.sh,$(call $(hook))))
+	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-configure.sh"
+	@# Always run pkg_size_before (needed regardless of sstate)
 	@$(call pkg_size_before,$(TARGET_DIR))
 	@$(call pkg_size_before,$(STAGING_DIR),-staging)
 	@$(call pkg_size_before,$(BINARIES_DIR),-images)
 	@$(call pkg_size_before,$(HOST_DIR),-host)
-	$(foreach hook,$($(PKG)_PRE_CONFIGURE_HOOKS),$(call $(hook))$(sep))
-	$($(PKG)_CONFIGURE_CMDS)
-	$(foreach hook,$($(PKG)_POST_CONFIGURE_HOOKS),$(call $(hook))$(sep))
+	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
+		echo ">>> $($(PKG)_NAME)  Skipping configure (sstate cache hit)"; \
+	else \
+		$(call MESSAGE,"Configuring"); \
+		sh "$(@D)/.sstate-configure.sh"; \
+	fi
 	@$(call step_end,configure)
 	$(Q)touch $@
-
-# Build
 $(BUILD_DIR)/%/.stamp_built:
 	@$(call step_start,build)
-	@$(call MESSAGE,"Building")
-	$(foreach hook,$($(PKG)_PRE_BUILD_HOOKS),$(call $(hook))$(sep))
-	+$($(PKG)_BUILD_CMDS)
-	$(foreach hook,$($(PKG)_POST_BUILD_HOOKS),$(call $(hook))$(sep))
+	$(file >$(@D)/.sstate-build.sh,#!/bin/sh)
+	$(file >>$(@D)/.sstate-build.sh,set -e)
+	$(foreach hook,$($(PKG)_PRE_BUILD_HOOKS),$(file >>$(@D)/.sstate-build.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-build.sh,$(call $(hook))))
+	$(file >>$(@D)/.sstate-build.sh,$($(PKG)_BUILD_CMDS))
+	$(foreach hook,$($(PKG)_POST_BUILD_HOOKS),$(file >>$(@D)/.sstate-build.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-build.sh,$(call $(hook))))
+	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-build.sh"
+	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
+		echo ">>> $($(PKG)_NAME)  Skipping build (sstate cache hit)"; \
+	else \
+		$(call MESSAGE,"Building"); \
+		sh "$(@D)/.sstate-build.sh"; \
+	fi
 	@$(call step_end,build)
 	$(Q)touch $@
-
-# Install to host dir
 $(BUILD_DIR)/%/.stamp_host_installed:
 	@$(call step_start,install-host)
-	@$(call MESSAGE,"Installing to host directory")
-	$(foreach hook,$($(PKG)_PRE_INSTALL_HOOKS),$(call $(hook))$(sep))
-	+$($(PKG)_INSTALL_CMDS)
-	$(foreach hook,$($(PKG)_POST_INSTALL_HOOKS),$(call $(hook))$(sep))
+	@# Generate install script (Make-level, no shell involved)
+	$(file >$(@D)/.sstate-install-host.sh,#!/bin/sh)
+	$(file >>$(@D)/.sstate-install-host.sh,set -e)
+	$(foreach h,$($(PKG)_PRE_INSTALL_HOOKS),$(file >>$(@D)/.sstate-install-host.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-install-host.sh,$(call $(h))))
+	$(file >>$(@D)/.sstate-install-host.sh,$($(PKG)_INSTALL_CMDS))
+	$(foreach h,$($(PKG)_POST_INSTALL_HOOKS),$(file >>$(@D)/.sstate-install-host.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-install-host.sh,$(call $(h))))
+	@# Strip @ prefixes left from $(Q) expansion in the script
+	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-install-host.sh"
+	@# Execute: restore from cache, capture via OverlayFS, or run directly
+	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ -f "$(@D)/.sstate-hit" ]; then \
+		$(call sstate-restore-phase,host,$(HOST_DIR)); \
+	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
+		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
+		[ "$${OVL}" = "supported" ]; then \
+		$(call MESSAGE,"Installing to host directory (capturing with OverlayFS)"); \
+		$(call sstate-overlay-capture,host,$(HOST_DIR),$(@D)/.sstate-install-host.sh); \
+		touch "$(@D)/.sstate-overlay"; \
+	else \
+		$(call MESSAGE,"Installing to host directory"); \
+		sh "$(@D)/.sstate-install-host.sh"; \
+	fi
 	@$(call step_end,install-host)
 	$(Q)touch $@
-
-# Install to staging dir
-#
-# Some packages install libtool .la files alongside any installed
-# libraries. These .la files sometimes refer to paths relative to the
-# sysroot, which libtool will interpret as absolute paths to host
-# libraries instead of the target libraries. Since this is not what we
-# want, these paths are fixed by prefixing them with $(STAGING_DIR).
-# As we configure with --prefix=/usr, this fix needs to be applied to
-# any path that starts with /usr.
-#
-# To protect against the case that the output or staging directories or
-# the pre-installed external toolchain themselves are under /usr, we first
-# substitute away any occurrences of these directories with @BASE_DIR@,
-# @STAGING_DIR@ and @TOOLCHAIN_EXTERNAL_INSTALL_DIR@ respectively.
-#
-# Note that STAGING_DIR can be outside BASE_DIR when the user sets
-# BR2_HOST_DIR to a custom value. Note that TOOLCHAIN_EXTERNAL_INSTALL_DIR
-# can be under @BASE_DIR@ when it's a downloaded toolchain, and can be
-# empty when we use an internal toolchain.
-#
-$(BUILD_DIR)/%/.stamp_staging_installed:
-	@$(call step_start,install-staging)
-	@$(call MESSAGE,"Installing to staging directory")
-	$(foreach hook,$($(PKG)_PRE_INSTALL_STAGING_HOOKS),$(call $(hook))$(sep))
-	+$($(PKG)_INSTALL_STAGING_CMDS)
-	$(foreach hook,$($(PKG)_POST_INSTALL_STAGING_HOOKS),$(call $(hook))$(sep))
-	$(Q)if test -n "$($(PKG)_CONFIG_SCRIPTS)" ; then \
-		$(call MESSAGE,"Fixing package configuration files") ;\
-			$(SED)  "s,$(HOST_DIR),@HOST_DIR@,g" \
-				-e "s,$(BASE_DIR),@BASE_DIR@,g" \
-				-e "s,^\(exec_\)\?prefix=.*,\1prefix=@STAGING_DIR@/usr,g" \
-				-e "s,-I/usr/,-I@STAGING_DIR@/usr/,g" \
-				-e "s,-L/usr/,-L@STAGING_DIR@/usr/,g" \
-				-e 's,@STAGING_DIR@,$$(dirname $$(readlink -e $$0))/../..,g' \
-				-e 's,@HOST_DIR@,$$(dirname $$(readlink -e $$0))/../../../..,g' \
-				-e "s,@BASE_DIR@,$(BASE_DIR),g" \
-				$(addprefix $(STAGING_DIR)/usr/bin/,$($(PKG)_CONFIG_SCRIPTS)) ;\
-	fi
-	@$(call MESSAGE,"Fixing libtool files")
-	for la in $$(find $(STAGING_DIR)/usr/lib* -name "*.la"); do \
-		cp -a "$${la}" "$${la}.fixed" && \
-		$(SED) "s:$(BASE_DIR):@BASE_DIR@:g" \
-			-e "s:$(STAGING_DIR):@STAGING_DIR@:g" \
-			$(if $(TOOLCHAIN_EXTERNAL_INSTALL_DIR),\
-				-e "s:$(TOOLCHAIN_EXTERNAL_INSTALL_DIR):@TOOLCHAIN_EXTERNAL_INSTALL_DIR@:g") \
-			-e "s:\(['= ]\)/usr:\\1@STAGING_DIR@/usr:g" \
-			-e "s:\(['= ]\)/lib:\\1@STAGING_DIR@/lib:g" \
-			$(if $(TOOLCHAIN_EXTERNAL_INSTALL_DIR),\
-				-e "s:@TOOLCHAIN_EXTERNAL_INSTALL_DIR@:$(TOOLCHAIN_EXTERNAL_INSTALL_DIR):g") \
-			-e "s:@STAGING_DIR@:$(STAGING_DIR):g" \
-			-e "s:@BASE_DIR@:$(BASE_DIR):g" \
-			"$${la}.fixed" && \
-		if cmp -s "$${la}" "$${la}.fixed"; then \
-			rm -f "$${la}.fixed"; \
-		else \
-			mv "$${la}.fixed" "$${la}"; \
-		fi || exit 1; \
-	done
-	@$(call step_end,install-staging)
-	$(Q)touch $@
-
-# Install to images dir
 $(BUILD_DIR)/%/.stamp_images_installed:
 	@$(call step_start,install-image)
-	@$(call MESSAGE,"Installing to images directory")
-	$(foreach hook,$($(PKG)_PRE_INSTALL_IMAGES_HOOKS),$(call $(hook))$(sep))
-	+$($(PKG)_INSTALL_IMAGES_CMDS)
-	$(foreach hook,$($(PKG)_POST_INSTALL_IMAGES_HOOKS),$(call $(hook))$(sep))
+	$(file >$(@D)/.sstate-install-images.sh,#!/bin/sh)
+	$(file >>$(@D)/.sstate-install-images.sh,set -e)
+	$(file >>$(@D)/.sstate-install-images.sh,cd "$(TOPDIR)")
+	$(foreach h,$($(PKG)_PRE_INSTALL_IMAGES_HOOKS),$(file >>$(@D)/.sstate-install-images.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-install-images.sh,$(call $(h))))
+	$(file >>$(@D)/.sstate-install-images.sh,$($(PKG)_INSTALL_IMAGES_CMDS))
+	$(foreach h,$($(PKG)_POST_INSTALL_IMAGES_HOOKS),$(file >>$(@D)/.sstate-install-images.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-install-images.sh,$(call $(h))))
+	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-install-images.sh"
+	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
+		$(call sstate-restore-phase,images,$(BINARIES_DIR)); \
+	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
+		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
+		[ "$${OVL}" = "supported" ]; then \
+		$(call MESSAGE,"Installing to images directory (capturing with OverlayFS)"); \
+		$(call sstate-overlay-capture,images,$(BINARIES_DIR),$(@D)/.sstate-install-images.sh); \
+		touch "$(@D)/.sstate-overlay"; \
+	else \
+		$(call MESSAGE,"Installing to images directory"); \
+		sh "$(@D)/.sstate-install-images.sh"; \
+	fi
 	@$(call step_end,install-image)
 	$(Q)touch $@
 
 # Install to target dir
 $(BUILD_DIR)/%/.stamp_target_installed:
 	@$(call step_start,install-target)
-	@$(call MESSAGE,"Installing to target")
-	$(foreach hook,$($(PKG)_PRE_INSTALL_TARGET_HOOKS),$(call $(hook))$(sep))
-	+$($(PKG)_INSTALL_TARGET_CMDS)
-	$(if $(BR2_INIT_SYSTEMD),\
-		$($(PKG)_INSTALL_INIT_SYSTEMD))
-	$(if $(BR2_INIT_SYSV)$(BR2_INIT_BUSYBOX),\
-		$($(PKG)_INSTALL_INIT_SYSV))
-	$(if $(BR2_INIT_OPENRC), \
-		$(or $($(PKG)_INSTALL_INIT_OPENRC), \
-			$($(PKG)_INSTALL_INIT_SYSV)))
-	$(foreach hook,$($(PKG)_POST_INSTALL_TARGET_HOOKS),$(call $(hook))$(sep))
+	@# Generate install script (Make-level, no shell involved)
+	$(file >$(@D)/.sstate-install-target.sh,#!/bin/sh)
+	$(file >>$(@D)/.sstate-install-target.sh,set -e)
+	$(foreach h,$($(PKG)_PRE_INSTALL_TARGET_HOOKS),$(file >>$(@D)/.sstate-install-target.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-install-target.sh,$(call $(h))))
+	$(file >>$(@D)/.sstate-install-target.sh,$($(PKG)_INSTALL_TARGET_CMDS))
+	$(if $(BR2_INIT_SYSTEMD),$(file >>$(@D)/.sstate-install-target.sh,$($(PKG)_INSTALL_INIT_SYSTEMD)))
+	$(if $(BR2_INIT_SYSV)$(BR2_INIT_BUSYBOX),$(file >>$(@D)/.sstate-install-target.sh,$($(PKG)_INSTALL_INIT_SYSV)))
+	$(if $(BR2_INIT_OPENRC),$(file >>$(@D)/.sstate-install-target.sh,$(or $($(PKG)_INSTALL_INIT_OPENRC),$($(PKG)_INSTALL_INIT_SYSV))))
+	$(foreach h,$($(PKG)_POST_INSTALL_TARGET_HOOKS),$(file >>$(@D)/.sstate-install-target.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-install-target.sh,$(call $(h))))
+	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-install-target.sh"
+	@# Execute: restore, overlay capture, or direct
+	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ -f "$(@D)/.sstate-hit" ]; then \
+		$(call sstate-restore-phase,target,$(TARGET_DIR)); \
+	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
+		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
+		[ "$${OVL}" = "supported" ]; then \
+		$(call MESSAGE,"Installing to target (capturing with OverlayFS)"); \
+		$(call sstate-overlay-capture,target,$(TARGET_DIR),$(@D)/.sstate-install-target.sh); \
+		touch "$(@D)/.sstate-overlay"; \
+	else \
+		$(call MESSAGE,"Installing to target"); \
+		sh "$(@D)/.sstate-install-target.sh"; \
+	fi
 	$(Q)if test -n "$($(PKG)_CONFIG_SCRIPTS)" ; then \
 		$(RM) -f $(addprefix $(TARGET_DIR)/usr/bin/,$($(PKG)_CONFIG_SCRIPTS)) ; \
 	fi
 	@$(call step_end,install-target)
 	$(Q)touch $@
-
-# Final installation step, completed when all installation steps
-# (host, images, staging, target) have completed
 $(BUILD_DIR)/%/.stamp_installed:
 	@$(call pkg_size_after,$(TARGET_DIR))
 	@$(call pkg_size_after,$(STAGING_DIR),-staging)
 	@$(call pkg_size_after,$(BINARIES_DIR),-images)
 	@$(call pkg_size_after,$(HOST_DIR),-host)
 	@$(call check_bin_arch)
+	$(if $(filter y,$(BR2_SSTATE_CACHE)),$(file >$(@D)/.sstate-artifacts.sh,$(call sstate-create-artifacts)))
+	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ ! -f "$(@D)/.sstate-hit" ] && [ ! -f "$(@D)/.sstate-overlay" ]; then \
+		sh "$(@D)/.sstate-artifacts.sh"; \
+	fi
 	$(Q)touch $@
 
 # Remove package sources
@@ -849,6 +1076,14 @@ $(2)_TARGET_EXTRACT =		$$($(2)_DIR)/.stamp_extracted
 $(2)_TARGET_SOURCE =		$$($(2)_DIR)/.stamp_downloaded
 $(2)_TARGET_ACTUAL_SOURCE =	$$($(2)_DIR)/.stamp_actual_downloaded
 $(2)_TARGET_DIRCLEAN =		$$($(2)_DIR)/.stamp_dircleaned
+
+# sstate-cache: per-package state files (virtual packages have no build output)
+ifeq ($$(BR2_SSTATE_CACHE),y)
+ifneq ($$($(2)_IS_VIRTUAL),YES)
+$(2)_SSTATE_HASH_FILE = $$($(2)_DIR)/.sstate-hash
+$(2)_SSTATE_HIT_FILE = $$($(2)_DIR)/.sstate-hit
+endif # !virtual
+endif # BR2_SSTATE_CACHE
 
 # default extract command
 $(2)_EXTRACT_CMDS ?= \
@@ -1340,3 +1575,4 @@ generic-package = $(call inner-generic-package,$(pkgname),$(call UPPERCASE,$(pkg
 host-generic-package = $(call inner-generic-package,host-$(pkgname),$(call UPPERCASE,host-$(pkgname)),$(call UPPERCASE,$(pkgname)),host)
 
 # :mode=makefile:
+# Install to staging dir
