@@ -25,7 +25,8 @@ sstate_restore() {
     local tarball="$1" dest="$2"
 
     if [ ! -f "$tarball" ]; then
-        return 1
+        # Package declared this phase but produced no files. Skip.
+        return 0
     fi
 
     if [ ! -s "$tarball" ]; then
