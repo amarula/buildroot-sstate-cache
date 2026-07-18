@@ -29,6 +29,7 @@ $(BUILD_DIR)/%/.stamp_staging_installed:
 	@# Execute: restore, overlay capture, or direct
 	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ -f "$(@D)/.sstate-hit" ]; then \
 		$(call sstate-restore-phase,staging,$(STAGING_DIR)); \
+		sh "$(@D)/.sstate-install-staging.sh"; \
 	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
 		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
 		[ "$${OVL}" = "supported" ]; then \
@@ -536,6 +537,7 @@ $(BUILD_DIR)/%/.stamp_host_installed:
 	@# Execute: restore from cache, capture via OverlayFS, or run directly
 	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ -f "$(@D)/.sstate-hit" ]; then \
 		$(call sstate-restore-phase,host,$(HOST_DIR)); \
+			sh "$(@D)/.sstate-install-host.sh"; \
 	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
 		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
 		[ "$${OVL}" = "supported" ]; then \
@@ -559,6 +561,7 @@ $(BUILD_DIR)/%/.stamp_images_installed:
 	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-install-images.sh"
 	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
 		$(call sstate-restore-phase,images,$(BINARIES_DIR)); \
+			sh "$(@D)/.sstate-install-images.sh"; \
 	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
 		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
 		[ "$${OVL}" = "supported" ]; then \
@@ -588,6 +591,7 @@ $(BUILD_DIR)/%/.stamp_target_installed:
 	@# Execute: restore, overlay capture, or direct
 	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ -f "$(@D)/.sstate-hit" ]; then \
 		$(call sstate-restore-phase,target,$(TARGET_DIR)); \
+			sh "$(@D)/.sstate-install-target.sh"; \
 	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
 		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
 		[ "$${OVL}" = "supported" ]; then \
