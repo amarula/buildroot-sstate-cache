@@ -278,13 +278,18 @@ define sstate-check-cache
 		HASH=$$(cat "$(@D)/.sstate-hash" 2>/dev/null | tr -d '\012' || true); \
 		if [ -n "$${HASH}" ]; then \
 			if [ "$($(PKG)_TYPE)" = "host" ]; then \
-				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-host.tar.gz" && SSTATE_CACHE_HIT="yes"; \
+				T="$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-host.tar.gz"; \
+				if [ -f "$$T" ]; then SSTATE_CACHE_HIT="yes"; \
+				else echo "sstate: MISS $$T" >&2; fi; \
 			else \
 				FOUND=0; \
-				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-target.tar.gz" && { FOUND=1; SSTATE_CACHE_HIT="yes"; }; \
-				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-staging.tar.gz" && { FOUND=1; SSTATE_CACHE_HIT="yes"; }; \
-				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-images.tar.gz" && { FOUND=1; SSTATE_CACHE_HIT="yes"; }; \
-				test -f "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-host.tar.gz" && { FOUND=1; SSTATE_CACHE_HIT="yes"; }; \
+				for f in "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-target.tar.gz" \
+				         "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-staging.tar.gz" \
+				         "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-images.tar.gz" \
+				         "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-host.tar.gz"; do \
+					if [ -f "$$f" ]; then echo "sstate: HIT $$f" >&2; FOUND=1; SSTATE_CACHE_HIT="yes"; \
+					else echo "sstate: MISS $$f" >&2; fi; \
+				done; \
 				if [ "$${FOUND}" -eq 0 ]; then \
 					SSTATE_CACHE_HIT="no"; \
 				fi; \
