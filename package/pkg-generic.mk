@@ -444,12 +444,8 @@ $(BUILD_DIR)/%/.stamp_extracted:
 	$(foreach hook,$($(PKG)_POST_EXTRACT_HOOKS),$(file >>$(@D)/.sstate-extract.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-extract.sh,$(call $(hook))))
 	$(file >>$(@D)/.sstate-extract.sh,chmod -R +rw $(@D))
 	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-extract.sh"
-	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
-		echo ">>> $($(PKG)_NAME)  Skipping extract (sstate cache hit)"; \
-	else \
-		$(call MESSAGE,"Extracting"); \
-		sh "$(@D)/.sstate-extract.sh"; \
-	fi
+	@$(call MESSAGE,"Extracting")
+	sh "$(@D)/.sstate-extract.sh"
 	@$(call step_end,extract)
 	$(Q)touch $@
 $(BUILD_DIR)/%/.stamp_rsynced:
@@ -473,16 +469,8 @@ $(BUILD_DIR)/%/.stamp_patched:
 	$(foreach dir,$(call pkg-patches-dirs,$(PKG)),$(file >>$(@D)/.sstate-patch.sh,$(APPLY_PATCHES) $(@D) $(dir) \*.patch))
 	$(foreach hook,$($(PKG)_POST_PATCH_HOOKS),$(file >>$(@D)/.sstate-patch.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-patch.sh,$(call $(hook))))
 	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-patch.sh"
-	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
-		echo ">>> $($(PKG)_NAME)  Skipping patch (sstate cache hit)"; \
-		if [ -n "$($(PKG)_KCONFIG_STAMP_DOTCONFIG)" ]; then \
-			touch "$(@D)/$($(PKG)_KCONFIG_STAMP_DOTCONFIG)" \
-				"$(@D)/.stamp_kconfig_fixup_done" 2>/dev/null || true; \
-		fi; \
-	else \
-		$(call MESSAGE,"Patching"); \
-		sh "$(@D)/.sstate-patch.sh"; \
-	fi
+	@$(call MESSAGE,"Patching")
+	sh "$(@D)/.sstate-patch.sh"
 	@$(call step_end,patch)
 	$(Q)touch $@
 $(BUILD_DIR)/%/.stamp_configured:
@@ -537,7 +525,7 @@ $(BUILD_DIR)/%/.stamp_host_installed:
 	@# Execute: restore from cache, capture via OverlayFS, or run directly
 	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ -f "$(@D)/.sstate-hit" ]; then \
 		$(call sstate-restore-phase,host,$(HOST_DIR)); \
-			sh "$(@D)/.sstate-install-host.sh"; \
+		sh "$(@D)/.sstate-install-host.sh"; \
 	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
 		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
 		[ "$${OVL}" = "supported" ]; then \
@@ -561,7 +549,7 @@ $(BUILD_DIR)/%/.stamp_images_installed:
 	@sed -i 's/^[[:space:]]*@//' "$(@D)/.sstate-install-images.sh"
 	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
 		$(call sstate-restore-phase,images,$(BINARIES_DIR)); \
-			sh "$(@D)/.sstate-install-images.sh"; \
+		sh "$(@D)/.sstate-install-images.sh"; \
 	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
 		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
 		[ "$${OVL}" = "supported" ]; then \
@@ -591,7 +579,7 @@ $(BUILD_DIR)/%/.stamp_target_installed:
 	@# Execute: restore, overlay capture, or direct
 	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ -f "$(@D)/.sstate-hit" ]; then \
 		$(call sstate-restore-phase,target,$(TARGET_DIR)); \
-			sh "$(@D)/.sstate-install-target.sh"; \
+		sh "$(@D)/.sstate-install-target.sh"; \
 	elif [ "$(BR2_SSTATE_CACHE)" = "y" ] && \
 		OVL=$$($(TOPDIR)/support/scripts/capture-overlay.sh check) && \
 		[ "$${OVL}" = "supported" ]; then \
