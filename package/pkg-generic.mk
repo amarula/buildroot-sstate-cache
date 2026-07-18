@@ -383,10 +383,10 @@ $(BUILD_DIR)/%/.stamp_downloaded:
 		$(call sstate-compute-hash); \
 			mkdir -p "$(SSTATE_HASH_DIR)"; \
 			HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\012'); \
-			echo "$${HASH}" >> "$(SSTATE_HASH_DIR)/$($(PKG)_NAME)-$${HASH}.hash"; \
+			echo "$${HASH}" > "$(SSTATE_HASH_DIR)/$($(PKG)_NAME)-$${HASH}.hash"; \
 			RAWNAME=$$(echo "$($(PKG)_NAME)" | sed 's/^host-//'); \
 			if [ "$${RAWNAME}" != "$($(PKG)_NAME)" ]; then \
-				echo "$${HASH}" >> "$(SSTATE_HASH_DIR)/$${RAWNAME}-$${HASH}.hash"; \
+				echo "$${HASH}" > "$(SSTATE_HASH_DIR)/$${RAWNAME}-$${HASH}.hash"; \
 			fi; \
 		$(call sstate-check-cache); \
 		if [ "$${SSTATE_CACHE_HIT}" = "yes" ]; then \
