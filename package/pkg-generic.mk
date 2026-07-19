@@ -607,10 +607,10 @@ $(BUILD_DIR)/%/.stamp_installed:
 	$(if $(filter y,$(BR2_SSTATE_CACHE)),$(file >$(@D)/.sstate-artifacts.sh,$(call sstate-create-artifacts)))
 	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ ! -f "$(@D)/.sstate-hit" ] && [ ! -f "$(@D)/.sstate-overlay" ]; then \
 		sh "$(@D)/.sstate-artifacts.sh"; \
-		if [ "$$($(PKG)_SSTATE_CAPTURE_BUILDDIR)" = "YES" ]; then \
-			HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\012'); \
-			tar czf "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-builddir.tar.gz" -C "$(@D)" .; \
-		fi; \
+	fi
+	$(Q)if [ "$(BR2_SSTATE_CACHE)" = "y" ] && [ ! -f "$(@D)/.sstate-hit" ] && [ "$${$(PKG)_SSTATE_CAPTURE_BUILDDIR}" = "YES" ]; then \
+		HASH=$$(cat "$(@D)/.sstate-hash" | tr -d '\012'); \
+		tar czf "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-builddir.tar.gz" -C "$(@D)" .; \
 	fi
 	$(Q)touch $@
 
