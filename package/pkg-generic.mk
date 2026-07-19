@@ -405,6 +405,7 @@ $(BUILD_DIR)/%/.stamp_downloaded:
 				--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-builddir.tar.gz" \
 				--dest "$(@D)" & \
 			wait; \
+			touch "$(@D)"/.stamp_* 2>/dev/null || true; \
 			if [ -x "$(HOST_DIR)/bin/patchelf" ] && \
 			   [ ! -f "$(HOST_DIR)/.sstate-rpath-fixed" ]; then \
 				$(TOPDIR)/support/scripts/fix-rpath host; \
