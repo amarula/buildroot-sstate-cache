@@ -350,6 +350,9 @@ define sstate-create-artifacts
 			--output "$(SSTATE_DIR)/$${PNAME}-$${HASH}-images.tar.gz" \
 			--dest "$(BINARIES_DIR)"; \
 	fi; \
+	if [ "$($(PKG)_SSTATE_CAPTURE_BUILDDIR)" = "YES" ]; then \
+		tar czf "$(SSTATE_DIR)/$${PNAME}-$${HASH}-builddir.tar.gz" -C "$(@D)" .; \
+	fi; \
 
 
 endef
@@ -401,6 +404,9 @@ $(BUILD_DIR)/%/.stamp_downloaded:
 			$(TOPDIR)/support/scripts/capture-overlay.sh restore \
 				--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-images.tar.gz" \
 				--dest "$(BINARIES_DIR)" & \
+			$(TOPDIR)/support/scripts/capture-overlay.sh restore \
+				--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-builddir.tar.gz" \
+				--dest "$(@D)" & \
 			wait; \
 			if [ -x "$(HOST_DIR)/bin/patchelf" ] && \
 			   [ ! -f "$(HOST_DIR)/.sstate-rpath-fixed" ]; then \
@@ -501,7 +507,7 @@ $(BUILD_DIR)/%/.stamp_built:
 	@$(call step_start,build)
 	$(file >$(@D)/.sstate-build.sh,#!/bin/sh)
 	$(file >>$(@D)/.sstate-build.sh,set -e)
-	$(file >>$(@D)/.sstate-build.sh,if [ -f "$(@D)/.sstate-hit" ] && [ "$($(PKG)_SSTATE_NEEDS_BUILD)" != "YES" ]; then exit 0; fi)
+	$(file >>$(@D)/.sstate-build.sh,if [ -f "$(@D)/.sstate-hit" ]; then exit 0; fi)
 	$(foreach hook,$($(PKG)_PRE_BUILD_HOOKS),$(file >>$(@D)/.sstate-build.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-build.sh,$(call $(hook))))
 	$(file >>$(@D)/.sstate-build.sh,$($(PKG)_BUILD_CMDS))
 	$(foreach hook,$($(PKG)_POST_BUILD_HOOKS),$(file >>$(@D)/.sstate-build.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-build.sh,$(call $(hook))))
