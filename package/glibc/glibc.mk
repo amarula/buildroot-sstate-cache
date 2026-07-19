@@ -221,4 +221,6 @@ define GLIBC_INSTALL_TARGET_CMDS
 	)
 endef
 
+GLIBC_SSTATE_NEEDS_CONFIGURE = YES
+
 $(eval $(autotools-package))
