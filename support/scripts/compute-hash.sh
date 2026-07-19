@@ -86,6 +86,75 @@ CONFIG_KEY_PREFIXES=(
     "BR2_GLOBAL_PATCH_DIR="
 )
 
+# compute_prebuild_hash <dep-name>
+# Compute a pre-build hash for a dependency that has no cached hash file.
+# Hashes the same inputs that would be hashed once the dep is built:
+# recipe .mk files, patches, source tarball, and targeted config.
+# Dependency hashes are NOT included (the dep's deps are unknown).
+# The result is stable across builds and matches the first-build hash.
+compute_prebuild_hash() {
+    local dep="$1"
+    local dep_raw dep_dir dep_source hash_input
+
+    dep_raw="${dep#host-}"
+    dep_dir=""
+    for d in "package/${dep}" "package/${dep_raw}" \
+             "boot/${dep}" "boot/${dep_raw}" \
+             "linux" "toolchain/${dep}"; do
+        if [ -d "${d}" ] && ls "${d}"/*.mk >/dev/null 2>&1; then
+            dep_dir="${d}"
+            break
+        fi
+    done
+
+    # Hash recipe .mk files
+    if [ -n "${dep_dir}" ]; then
+        find "${dep_dir}" -maxdepth 1 -name '*.mk' -type f | sort | \
+            xargs sha256sum
+    fi
+
+    # Hash patches
+    if [ -n "${dep_dir}" ]; then
+        find "${dep_dir}" -maxdepth 1 -name '*.patch' -type f | sort | \
+            xargs sha256sum 2>/dev/null
+        if [ "${dep_raw}" != "${dep}" ]; then
+            # Check versioned patches too
+            local dep_ver
+            dep_ver=$(grep -m1 "^${dep}_VERSION\s*=\|^${dep_raw}_VERSION\s*=" "${dep_dir}"/*.mk 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '\n')
+            if [ -n "${dep_ver}" ] && [ -d "${dep_dir}/${dep_ver}" ]; then
+                find "${dep_dir}/${dep_ver}" -name '*.patch' -type f | sort | \
+                    xargs sha256sum 2>/dev/null
+            fi
+        fi
+    fi
+
+    # Hash source tarball (look up _SOURCE and _SITE from .mk)
+    if [ -n "${dep_dir}" ]; then
+        local dep_source dep_dl_dir
+        dep_source=$(grep -m1 "^\(${dep^^}\|${dep_raw^^}\)\?_SOURCE\s*=" "${dep_dir}"/*.mk 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '\n')
+        if [ -n "${dep_source}" ]; then
+            dep_dl_dir="${CONFIG_FILE%/*}/dl/${dep_raw}"
+            [ -f "${dep_dl_dir}/${dep_source}" ] && sha256sum "${dep_dl_dir}/${dep_source}" 2>/dev/null
+        fi
+    fi
+
+    # Hash targeted config (same as the main package would)
+    {
+        local prefix escaped greplist
+        greplist=""
+        for prefix in "${CONFIG_KEY_PREFIXES[@]}"; do
+            escaped=$(printf '%s' "$prefix" | sed 's/[]\\.*^$[]/\\&/g')
+            if [ -z "$greplist" ]; then
+                greplist="^(${escaped}"
+            else
+                greplist="${greplist}|${escaped}"
+            fi
+        done
+        greplist="${greplist})"
+        grep -E "$greplist" "$CONFIG_FILE" | LC_ALL=C sort
+    }
+}
+
 # Parse arguments
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -212,28 +281,13 @@ if [ ${#DEPS[@]} -gt 0 ]; then
             cat $DEP_FILES >> "$INPUT_FILE"
             echo "  $dep = $(echo $DEP_FILES | wc -w) revision(s)" >> "$INPUT_FILE"
         else
-            # No pre-built hash file for this dependency. Hash the
-            # dep recipe .mk files as fallback, so that recipe changes
-            # or the dep being enabled/disabled triggers proper cascade
-            # invalidation.
-            DEP_RAWNAME="${dep#host-}"
-            DEP_PKGDIR=""
-            for d in "package/${dep}" "package/${DEP_RAWNAME}" \
-                     "boot/${dep}" "boot/${DEP_RAWNAME}" \
-                     "linux" "toolchain/${dep}"; do
-                if [ -d "${d}" ] && ls "${d}"/*.mk >/dev/null 2>&1; then
-                    DEP_PKGDIR="${d}"
-                    break
-                fi
-            done
-            if [ -n "${DEP_PKGDIR}" ]; then
-                find "${DEP_PKGDIR}" -maxdepth 1 -name "*.mk" -type f | sort | \
-                    xargs sha256sum | sha256sum | cut -d" " -f1 >> "$INPUT_FILE"
-                echo "  $dep = RECIPE:${DEP_PKGDIR}" >> "$INPUT_FILE"
-            else
-                echo "UNRESOLVED_${dep}" >> "$INPUT_FILE"
-                echo "  $dep = UNRESOLVED" >> "$INPUT_FILE"
-            fi
+            # Use a pre-build hash that mirrors what the dep will hash
+            # once built: recipe .mk files + patches + source tarball +
+            # targeted config. This is slower than a cached hash file
+            # but ensures the hash is stable from build 1 (no RECIPE
+            # fallback that changes to a different value on build 2).
+            compute_prebuild_hash "$dep" >> "$INPUT_FILE"
+            echo "  $dep = prebuild" >> "$INPUT_FILE"
         fi
     done
 else
