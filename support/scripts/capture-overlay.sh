@@ -67,8 +67,8 @@ sstate_capture_filelist() {
 
     # Tar from within DEST so relative paths resolve correctly.
     local output_abs
+    mkdir -p "$(dirname "$output")"
     output_abs="$(cd "$(dirname "$output")" && pwd)/$(basename "$output")"
-    mkdir -p "$(dirname "$output_abs")"
 
     if ( cd "$dest" && tar czf "${output_abs}.tmp" --files-from "$tmpfile" ); then
         mv "${output_abs}.tmp" "$output_abs"
