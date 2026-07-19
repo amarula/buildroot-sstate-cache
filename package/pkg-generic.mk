@@ -405,7 +405,6 @@ $(BUILD_DIR)/%/.stamp_downloaded:
 				--tarball "$(SSTATE_DIR)/$($(PKG)_NAME)-$${HASH}-builddir.tar.gz" \
 				--dest "$(@D)" & \
 			wait; \
-			touch "$(@D)"/.stamp_* 2>/dev/null || true; \
 			if [ -x "$(HOST_DIR)/bin/patchelf" ] && \
 			   [ ! -f "$(HOST_DIR)/.sstate-rpath-fixed" ]; then \
 				$(TOPDIR)/support/scripts/fix-rpath host; \
@@ -477,6 +476,15 @@ $(BUILD_DIR)/%/.stamp_patched:
 	sh "$(@D)/.sstate-patch.sh"
 	@$(call step_end,patch)
 	$(Q)touch $@
+	$(Q)if [ -f "$(@D)/.sstate-hit" ]; then \
+		touch "$(@D)"/.stamp_configured \
+			"$(@D)"/.stamp_built \
+			"$(@D)"/.stamp_host_installed \
+			"$(@D)"/.stamp_staging_installed \
+			"$(@D)"/.stamp_target_installed \
+			"$(@D)"/.stamp_images_installed \
+			"$(@D)"/.stamp_installed 2>/dev/null; \
+	fi
 $(BUILD_DIR)/%/.stamp_configured:
 	@$(call step_start,configure)
 	$(file >$(@D)/.sstate-configure.sh,#!/bin/sh)
