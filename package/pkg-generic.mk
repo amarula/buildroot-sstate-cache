@@ -501,7 +501,7 @@ $(BUILD_DIR)/%/.stamp_built:
 	@$(call step_start,build)
 	$(file >$(@D)/.sstate-build.sh,#!/bin/sh)
 	$(file >>$(@D)/.sstate-build.sh,set -e)
-	$(file >>$(@D)/.sstate-build.sh,if [ -f "$(@D)/.sstate-hit" ]; then exit 0; fi)
+	$(file >>$(@D)/.sstate-build.sh,if [ -f "$(@D)/.sstate-hit" ] && [ "$($(PKG)_SSTATE_NEEDS_BUILD)" != "YES" ]; then exit 0; fi)
 	$(foreach hook,$($(PKG)_PRE_BUILD_HOOKS),$(file >>$(@D)/.sstate-build.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-build.sh,$(call $(hook))))
 	$(file >>$(@D)/.sstate-build.sh,$($(PKG)_BUILD_CMDS))
 	$(foreach hook,$($(PKG)_POST_BUILD_HOOKS),$(file >>$(@D)/.sstate-build.sh,cd "$(TOPDIR)")$(file >>$(@D)/.sstate-build.sh,$(call $(hook))))
